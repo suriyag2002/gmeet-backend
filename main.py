@@ -14,8 +14,26 @@ load_dotenv(BASE_DIR / ".env")
 # Render Secret Files and Persistent Disk paths can be configured with environment variables.
 # Local development falls back to files beside main.py.
 PKCE_VERIFIER_FILE = Path(os.getenv("OAUTH_PKCE_FILE", str(BASE_DIR / "oauth_code_verifier.txt")))
-CREDENTIALS_FILE = Path(os.getenv("GOOGLE_CREDENTIALS_FILE", str(BASE_DIR / "/etc/secrets/credentials.json")))
-TOKEN_FILE = Path(os.getenv("GOOGLE_TOKEN_FILE", str(BASE_DIR / "/etc/secrets/token.json")))
+CREDENTIALS_FILE = Path(
+    os.getenv(
+        "GOOGLE_CREDENTIALS_FILE",
+        str(Path("/etc/secrets/credentials.json") if Path("/etc/secrets/credentials.json").exists()
+            else BASE_DIR / "credentials.json"),
+    )
+)
+
+# Render Secret Files are read-only. Read the secret token as a fallback, but
+# write newly authorized/refreshed credentials to a writable path.
+TOKEN_SECRET_FILE = Path(
+    os.getenv(
+        "GOOGLE_TOKEN_FILE",
+        str(Path("/etc/secrets/token.json") if Path("/etc/secrets/token.json").exists()
+            else BASE_DIR / "token.json"),
+    )
+)
+TOKEN_WRITE_FILE = Path(
+    os.getenv("GOOGLE_TOKEN_WRITE_FILE", str(BASE_DIR / "token.json"))
+)
 STATE_FILE = Path(os.getenv("OAUTH_STATE_FILE", str(BASE_DIR / "oauth_state.txt")))
 FRONTEND_URL = os.getenv(
     "FRONTEND_URL",
@@ -74,13 +92,19 @@ def get_flow(state=None):
             detail=f"Could not load Google OAuth credentials: {exc}",
         )
 def save_credentials(credentials):
-    TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
-    TOKEN_FILE.write_text(
+    """Save OAuth credentials only to a writable path, never to a Render Secret File."""
+    TOKEN_WRITE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    TOKEN_WRITE_FILE.write_text(
         credentials.to_json(),
         encoding="utf-8",
     )
+
+
 def get_credentials():
-    if not TOKEN_FILE.exists():
+    # Prefer the writable token so refreshed credentials can be reused.
+    token_path = TOKEN_WRITE_FILE if TOKEN_WRITE_FILE.exists() else TOKEN_SECRET_FILE
+
+    if not token_path.exists():
         raise HTTPException(
             status_code=401,
             detail=(
@@ -90,7 +114,7 @@ def get_credentials():
         )
     try:
         credentials = Credentials.from_authorized_user_file(
-            str(TOKEN_FILE),
+            str(token_path),
             SCOPES,
         )
         if credentials.expired and credentials.refresh_token:
@@ -114,9 +138,6 @@ def get_credentials():
         )
 def google_request(method, url, **kwargs):
     credentials = get_credentials()
-    if credentials.expired and credentials.refresh_token:
-        credentials.refresh(GoogleAuthRequest())
-        save_credentials(credentials)
     headers = kwargs.pop("headers", {}).copy()
     headers["Authorization"] = f"Bearer {credentials.token}"
     try:
@@ -202,7 +223,7 @@ def auth_callback(request: Request):
     return RedirectResponse(FRONTEND_URL)
 @app.get("/auth/status")
 def auth_status():
-    if not TOKEN_FILE.exists():
+    if not TOKEN_WRITE_FILE.exists() and not TOKEN_SECRET_FILE.exists():
         return {"connected": False}
     try:
         credentials = get_credentials()
@@ -305,15 +326,6 @@ def stream_drive_video(file_id: str, request: Request):
     if not file_id or "/" in file_id or ".." in file_id:
         raise HTTPException(status_code=400, detail="Invalid Drive file ID.")
     credentials = get_credentials()
-    if credentials.expired and credentials.refresh_token:
-        try:
-            credentials.refresh(GoogleAuthRequest())
-            save_credentials(credentials)
-        except Exception as exc:
-            raise HTTPException(
-                status_code=401,
-                detail=f"Unable to refresh Google credentials: {exc}",
-            )
     if not credentials.valid or not credentials.token:
         raise HTTPException(
             status_code=401,
