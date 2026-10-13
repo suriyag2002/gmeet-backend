@@ -11,7 +11,7 @@ from google.auth.transport.requests import Request as GoogleRequest
 router = APIRouter(prefix="/api/videos", tags=["Videos"])
 
 BASE_DIR = Path(__file__).resolve().parent
-TOKEN_FILE = BASE_DIR / "token.json"
+TOKEN_FILE = BASE_DIR / "/etc/secrets/token.json"
 
 # Use the exact ID from your successful Python test.
 VIDEO_ID = "106erqKvsZIKKS0ni8SrgrtsofXCUONK1"
