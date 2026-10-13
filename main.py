@@ -50,11 +50,14 @@ print(f"Frontend URL: {FRONTEND_URL}")
 print(f"Backend URL:  {BACKEND_URL}")
 print(f"OAuth redirect URI: {REDIRECT_URI}")
 print("=" * 55)
+
 SCOPES = [
     "https://www.googleapis.com/auth/meetings.space.created",
     "https://www.googleapis.com/auth/meetings.space.readonly",
     "https://www.googleapis.com/auth/drive.meet.readonly",
+    "https://www.googleapis.com/auth/drive.readonly",
 ]
+
 app = FastAPI(title="LMS Google Meet and Drive API")
 app.add_middleware(
     CORSMiddleware,
