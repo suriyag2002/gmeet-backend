@@ -1,4 +1,5 @@
 import os
+import logging
 from pathlib import Path
 os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
 import requests
@@ -9,6 +10,13 @@ from fastapi.responses import RedirectResponse, StreamingResponse, Response
 from google.auth.transport.requests import Request as GoogleAuthRequest
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
+
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+)
+logger = logging.getLogger("studpro.drive")
+
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env")
 # Render Secret Files and Persistent Disk paths can be configured with environment variables.
@@ -107,69 +115,78 @@ def get_credentials():
     # Prefer the writable token so refreshed credentials can be reused.
     token_path = TOKEN_WRITE_FILE if TOKEN_WRITE_FILE.exists() else TOKEN_SECRET_FILE
 
+    logger.info("Loading Google credentials")
+    logger.info("Selected token path: %s", token_path)
+    logger.info("Token file exists: %s", token_path.exists())
+    logger.info("OAuth client file path: %s", CREDENTIALS_FILE)
+    logger.info("OAuth client file exists: %s", CREDENTIALS_FILE.exists())
+
     if not token_path.exists():
+        logger.error("No Google token file found")
         raise HTTPException(
             status_code=401,
-            detail=(
-                "Google account is not connected. "
-                "Open /auth/google to authorize."
-            ),
+            detail="Google account is not connected. Open /auth/google to authorize.",
         )
+
     try:
-        credentials = Credentials.from_authorized_user_file(
-            str(token_path),
-            SCOPES,
-        )
+        credentials = Credentials.from_authorized_user_file(str(token_path), SCOPES)
+        logger.info("Token loaded; valid=%s expired=%s refresh_token_present=%s",
+                    credentials.valid, credentials.expired, bool(credentials.refresh_token))
+        # Never log access tokens, refresh tokens, or client secrets.
+        logger.debug("Scopes stored in token: %s", credentials.scopes)
+
         if credentials.expired and credentials.refresh_token:
+            logger.info("Google credentials expired; attempting refresh")
             credentials.refresh(GoogleAuthRequest())
             save_credentials(credentials)
+            logger.info("Google credentials refreshed and saved to %s", TOKEN_WRITE_FILE)
+
         if not credentials.valid:
+            logger.error("Google credentials remain invalid")
             raise HTTPException(
                 status_code=401,
-                detail=(
-                    "Google credentials are invalid or expired. "
-                    "Reconnect your Google account."
-                ),
+                detail="Google credentials are invalid or expired. Reconnect your Google account.",
             )
         return credentials
     except HTTPException:
         raise
     except Exception as exc:
+        logger.exception("Failed to load or refresh Google credentials: %s", type(exc).__name__)
         raise HTTPException(
             status_code=401,
-            detail=f"Unable to load Google credentials: {exc}",
+            detail="Unable to load Google credentials. Check local backend logs.",
         )
+
+
 def google_request(method, url, **kwargs):
     credentials = get_credentials()
     headers = kwargs.pop("headers", {}).copy()
     headers["Authorization"] = f"Bearer {credentials.token}"
+    params_for_log = kwargs.get("params", {})
+    logger.info("Google API request: %s %s", method, url)
+    logger.debug("Google API params: %s", params_for_log)
+
     try:
         response = requests.request(
-            method,
-            url,
-            headers=headers,
-            timeout=30,
-            **kwargs,
+            method, url, headers=headers, timeout=30, **kwargs
         )
+        logger.info("Google API response status: %s (%s)", response.status_code, url)
+        if not response.ok:
+            logger.error("Google API error body: %s", response.text[:1500])
         response.raise_for_status()
         if not response.content:
             return {}
         return response.json()
     except requests.HTTPError as exc:
-        detail = (
-            exc.response.text[:1500]
-            if exc.response is not None
-            else str(exc)
-        )
-        raise HTTPException(
-            status_code=502,
-            detail=f"Google API error: {detail}",
-        )
+        detail = exc.response.text[:1500] if exc.response is not None else str(exc)
+        raise HTTPException(status_code=502, detail=f"Google API error: {detail}")
     except requests.RequestException as exc:
+        logger.exception("Google API connection failed")
         raise HTTPException(
             status_code=502,
-            detail=f"Google API connection failed: {exc}",
+            detail=f"Google API connection failed: {type(exc).__name__}",
         )
+
 # --------------------------------------------------
 # HEALTH CHECK
 # --------------------------------------------------
@@ -226,15 +243,15 @@ def auth_callback(request: Request):
     return RedirectResponse(FRONTEND_URL)
 @app.get("/auth/status")
 def auth_status():
+    logger.info("Checking local Google auth status")
     if not TOKEN_WRITE_FILE.exists() and not TOKEN_SECRET_FILE.exists():
+        logger.warning("No token file exists at either configured token path")
         return {"connected": False}
     try:
         credentials = get_credentials()
-        return {
-            "connected": credentials.valid,
-            "account_authorized": True,
-        }
-    except HTTPException:
+        return {"connected": credentials.valid, "account_authorized": True}
+    except HTTPException as exc:
+        logger.warning("Auth status check failed: HTTP %s", exc.status_code)
         return {"connected": False}
 @app.post("/meetings")
 def create_meeting():
@@ -304,22 +321,104 @@ def get_recordings(space_id: str):
     }
 @app.get("/drive/meet-recordings")
 def list_drive_recordings():
+    """Diagnostic listing: list non-trashed files and log metadata, not secrets."""
+    logger.info("========== DRIVE RECORDINGS DEBUG START ==========")
+    logger.info("Backend directory: %s", BASE_DIR)
+    logger.info("Credentials file exists: %s", CREDENTIALS_FILE.exists())
+    logger.info("Token write path exists: %s", TOKEN_WRITE_FILE.exists())
+    logger.info("Token secret/fallback path exists: %s", TOKEN_SECRET_FILE.exists())
+
     result = google_request(
         "GET",
         "https://www.googleapis.com/drive/v3/files",
         params={
-            "q": "mimeType = 'video/mp4' and trashed = false",
+            # Temporary diagnostic query: remove MIME-type filtering to see
+            # whether Meet recordings are stored with a different MIME type.
+            "q": "trashed = false",
             "pageSize": 100,
             "orderBy": "createdTime desc",
-            "fields": (
-                "files(id,name,mimeType,createdTime,"
-                "webViewLink,size)"
-            ),
+            "fields": "nextPageToken,files(id,name,mimeType,createdTime,webViewLink,size)",
         },
     )
+
+    files = result.get("files", [])
+    logger.info("Drive files returned on this page: %d", len(files))
+    logger.info("More pages available: %s", bool(result.get("nextPageToken")))
+    for item in files:
+        logger.info(
+            "Drive file: name=%r | id=%s | mimeType=%s | createdTime=%s | size=%s",
+            item.get("name"), item.get("id"), item.get("mimeType"),
+            item.get("createdTime"), item.get("size"),
+        )
+
+    video_files = [f for f in files if (f.get("mimeType") or "").startswith("video/")]
+    logger.info("Video files on this page: %d", len(video_files))
+    logger.info("========== DRIVE RECORDINGS DEBUG END ==========")
+
+    return {"files": files, "nextPageToken": result.get("nextPageToken")}
+
+@app.get("/drive/folders/{folder_id}/videos")
+def list_folder_videos(folder_id: str):
+    """List all video files directly inside a Google Drive folder."""
+    if not folder_id or "/" in folder_id or ".." in folder_id:
+        raise HTTPException(status_code=400, detail="Invalid Google Drive folder ID.")
+
+    logger.info("Listing videos in Google Drive folder: %s", folder_id)
+    all_files = []
+    page_token = None
+    page_number = 0
+
+    while True:
+        page_number += 1
+        params = {
+            "q": f"'{folder_id}' in parents and trashed = false",
+            "pageSize": 100,
+            "orderBy": "name",
+            "fields": "nextPageToken,files(id,name,mimeType,createdTime,size,webViewLink)",
+        }
+        if page_token:
+            params["pageToken"] = page_token
+
+        result = google_request(
+            "GET",
+            "https://www.googleapis.com/drive/v3/files",
+            params=params,
+        )
+        page_files = result.get("files", [])
+        logger.info(
+            "Folder %s page %d returned %d files",
+            folder_id, page_number, len(page_files),
+        )
+        all_files.extend(page_files)
+        page_token = result.get("nextPageToken")
+        if not page_token:
+            break
+
+    videos = []
+    for item in all_files:
+        mime_type = item.get("mimeType", "")
+        if not mime_type.startswith("video/"):
+            continue
+        videos.append({
+            "id": item["id"],
+            "name": item.get("name", "Untitled video"),
+            "mimeType": mime_type,
+            "createdTime": item.get("createdTime"),
+            "size": item.get("size"),
+            "streamUrl": f"/api/videos/{item['id']}/stream",
+        })
+
+    logger.info(
+        "Folder %s: %d total files, %d videos",
+        folder_id, len(all_files), len(videos),
+    )
     return {
-        "files": result.get("files", []),
+        "folder_id": folder_id,
+        "count": len(videos),
+        "videos": videos,
     }
+
+
 @app.get("/api/videos/{file_id}/stream")
 def stream_drive_video(file_id: str, request: Request):
     """
@@ -328,6 +427,8 @@ def stream_drive_video(file_id: str, request: Request):
     """
     if not file_id or "/" in file_id or ".." in file_id:
         raise HTTPException(status_code=400, detail="Invalid Drive file ID.")
+    logger.info("Stream request received for Drive file ID: %s", file_id)
+    logger.info("Browser Range header present: %s", bool(request.headers.get("range")))
     credentials = get_credentials()
     if not credentials.valid or not credentials.token:
         raise HTTPException(
@@ -353,13 +454,15 @@ def stream_drive_video(file_id: str, request: Request):
             status_code=502,
             detail=f"Could not connect to Google Drive: {exc}",
         )
+    logger.info("Google Drive stream response status=%s content_type=%s content_length=%s",
+                upstream.status_code, upstream.headers.get("Content-Type"),
+                upstream.headers.get("Content-Length"))
     if upstream.status_code not in (200, 206, 416):
         try:
             detail = upstream.text[:1500]
-            print(
-                f"[video-stream] Google Drive returned HTTP "
-                f"{upstream.status_code} for file {file_id}: {detail}",
-                flush=True,
+            logger.error(
+                "Google Drive stream returned HTTP %s for file %s: %s",
+                upstream.status_code, file_id, detail,
             )
         finally:
             upstream.close()
@@ -389,10 +492,8 @@ def stream_drive_video(file_id: str, request: Request):
                 if chunk:
                     yield chunk
         except Exception as exc:
-            print(
-                f"[video-stream] Error while reading Google Drive stream "
-                f"for file {file_id}: {type(exc).__name__}: {exc}",
-                flush=True,
+            logger.exception(
+                "Error while reading Google Drive stream for file %s", file_id
             )
             raise
         finally:
