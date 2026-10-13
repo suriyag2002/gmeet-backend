@@ -1,0 +1,26 @@
+
+# Environment variables and secrets
+.env
+.env.*
+
+# Allow example environment files
+!.env.example
+
+# Google OAuth credentials and tokens
+credentials.json
+credentials-v1.json
+token.json
+oauth_state.txt
+oauth_code_verifier.txt
+
+# Python virtual environments
+.venv/
+venv/
+env/
+
+# Python cache files
+__pycache__/
+*.py[cod]
+
+# Logs
+*.log

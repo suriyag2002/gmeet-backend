@@ -1,0 +1,827 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#0b0b12" />
+  <title>MeetFlow — LMS Meeting Manager</title>
+
+  <style>
+    :root {
+      --bg: #0b0b12;
+      --panel: #14141f;
+      --panel2: #191927;
+      --border: #2b2b40;
+      --text: #f5f4ff;
+      --muted: #9999b0;
+      --purple: #9b7bff;
+      --green: #42dba2;
+      --red: #ff777f;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Inter, system-ui, -apple-system, Arial, sans-serif;
+      min-height: 100vh;
+    }
+
+    button, input { font: inherit; }
+    button { cursor: pointer; }
+
+    .app {
+      width: min(1160px, 100%);
+      padding: 28px 20px 60px;
+      margin: auto;
+    }
+
+    .topbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 16px;
+      flex-wrap: wrap;
+      padding-bottom: 26px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .logo {
+      font-size: 23px;
+      font-weight: 850;
+      letter-spacing: -1px;
+    }
+
+    .logo span { color: var(--purple); }
+
+    .pill {
+      display: flex;
+      gap: 9px;
+      align-items: center;
+      border: 1px solid var(--border);
+      background: var(--panel);
+      border-radius: 999px;
+      padding: 10px 13px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #eab308;
+    }
+
+    .hero {
+      padding: 38px 0 28px;
+    }
+
+    .eyebrow {
+      color: var(--purple);
+      text-transform: uppercase;
+      letter-spacing: 2px;
+      font-size: 11px;
+      font-weight: 800;
+      margin-bottom: 12px;
+    }
+
+    h1 {
+      font-size: clamp(30px, 5vw, 45px);
+      line-height: 1.13;
+      letter-spacing: -1.8px;
+      margin: 0 0 12px;
+    }
+
+    .subtitle {
+      color: var(--muted);
+      line-height: 1.7;
+      font-size: 14px;
+      max-width: 680px;
+    }
+
+    .section-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      margin: 30px 0 15px;
+      flex-wrap: wrap;
+    }
+
+    h2 {
+      font-size: 17px;
+      margin: 0;
+      letter-spacing: -.3px;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 16px;
+    }
+
+    .card {
+      min-width: 0;
+      border: 1px solid var(--border);
+      border-radius: 19px;
+      background: linear-gradient(145deg, var(--panel2), var(--panel));
+      padding: 22px;
+    }
+
+    .card-icon {
+      display: grid;
+      place-items: center;
+      width: 43px;
+      height: 43px;
+      border: 1px solid #40345f;
+      background: #27203f;
+      border-radius: 13px;
+      font-size: 21px;
+      margin-bottom: 17px;
+    }
+
+    .card h2 { margin-bottom: 9px; }
+
+    .description {
+      font-size: 13px;
+      line-height: 1.7;
+      color: var(--muted);
+      min-height: 44px;
+      margin: 0 0 18px;
+    }
+
+    .field { margin-bottom: 15px; }
+
+    label {
+      display: block;
+      font-size: 12px;
+      color: #c7c4dc;
+      margin-bottom: 8px;
+    }
+
+    input {
+      width: 100%;
+      min-width: 0;
+      padding: 12px 13px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: #0d0d16;
+      color: var(--text);
+      outline: none;
+    }
+
+    input:focus {
+      border-color: var(--purple);
+      box-shadow: 0 0 0 3px #9b7bff20;
+    }
+
+    .btn {
+      display: inline-flex;
+      justify-content: center;
+      align-items: center;
+      gap: 8px;
+      border: 1px solid transparent;
+      border-radius: 10px;
+      padding: 12px 15px;
+      font-size: 13px;
+      font-weight: 750;
+      transition: .18s ease;
+      text-decoration: none;
+    }
+
+    .btn:hover { filter: brightness(1.12); }
+    .btn:disabled { opacity: .55; cursor: wait; }
+
+    .primary {
+      color: white;
+      background: #8258ef;
+    }
+
+    .secondary {
+      color: #e5e0ff;
+      background: #25243a;
+      border-color: #3a3855;
+    }
+
+    .danger {
+      color: #ffb0b4;
+      background: #361b25;
+      border-color: #63303c;
+    }
+
+    .full { width: 100%; }
+    .small { padding: 9px 12px; font-size: 12px; }
+
+    .result {
+      display: none;
+      margin-top: 14px;
+      padding: 14px;
+      border: 1px solid var(--border);
+      background: #0d0d16;
+      border-radius: 12px;
+      font-size: 13px;
+      line-height: 1.7;
+      overflow-wrap: anywhere;
+    }
+
+    .result.show { display: block; }
+    .result.error { border-color: #75313b; color: #ffb3b8; }
+    .result.success { border-color: #225c49; }
+    .result a { color: #c9baff; }
+
+    .result-title {
+      font-weight: 800;
+      margin-bottom: 8px;
+    }
+
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 12px;
+    }
+
+    .info {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.7;
+    }
+
+    .notice {
+      border: 1px solid #49402c;
+      background: #211c13;
+      color: #e9d5a0;
+      padding: 14px 16px;
+      border-radius: 12px;
+      font-size: 12px;
+      line-height: 1.7;
+      margin-top: 22px;
+    }
+
+    .file-list {
+      display: grid;
+      gap: 10px;
+      margin-top: 13px;
+    }
+
+    .file {
+      padding: 13px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: #12121d;
+    }
+
+    .file-name {
+      font-weight: 700;
+      font-size: 13px;
+      overflow-wrap: anywhere;
+    }
+
+    .file-meta {
+      color: var(--muted);
+      font-size: 11px;
+      margin-top: 6px;
+    }
+
+    .activity {
+      border: 1px solid var(--border);
+      border-radius: 15px;
+      background: var(--panel);
+      padding: 15px;
+      max-height: 230px;
+      overflow-y: auto;
+      font-size: 12px;
+      line-height: 1.8;
+      color: var(--muted);
+    }
+
+    .activity-entry {
+      border-bottom: 1px solid #272738;
+      padding: 6px 0;
+      overflow-wrap: anywhere;
+    }
+
+    .activity-entry:last-child { border-bottom: 0; }
+
+    .muted { color: var(--muted); }
+
+    @media (max-width: 680px) {
+      .app { padding: 20px 14px 40px; }
+      .grid { grid-template-columns: 1fr; }
+      .description { min-height: auto; }
+      .hero { padding-top: 28px; }
+      .card { padding: 18px; }
+    }
+  </style>
+</head>
+
+<body>
+  <main class="app">
+    <header class="topbar">
+      <div class="logo">Meet<span>Flow</span></div>
+
+      <div class="pill">
+        <span class="dot" id="statusDot"></span>
+        <span id="statusText">Checking backend...</span>
+      </div>
+    </header>
+
+    <section class="hero">
+      <div class="eyebrow">LMS developer console</div>
+      <h1>Your classroom,<br />connected.</h1>
+      <p class="subtitle">
+        Create Google Meet classrooms, check recording availability,
+        and inspect Google Drive files through your FastAPI backend.
+      </p>
+    </section>
+
+    <!-- Backend configuration -->
+    <section class="card">
+      <div class="section-head" style="margin-top:0">
+        <h2>Backend configuration</h2>
+        <span class="info">Step 1</span>
+      </div>
+
+      <div class="field">
+        <label for="apiUrl">FastAPI public URL</label>
+        <input
+          id="apiUrl"
+          type="url"
+          placeholder="https://your-backend.onrender.com"
+          autocomplete="url"
+        />
+      </div>
+
+      <div class="actions">
+        <button class="btn primary" id="saveApiBtn">Save URL & Test</button>
+        <button class="btn secondary" id="checkBtn">Check Google status</button>
+      </div>
+
+      <div class="result" id="backendResult" aria-live="polite"></div>
+
+      <p class="info" style="margin-top:12px">
+        For local testing, use http://localhost:8000. After deployment,
+        enter your real HTTPS backend URL here.
+      </p>
+    </section>
+
+    <div class="section-head">
+      <h2>Meeting management</h2>
+      <span class="info">Step 2</span>
+    </div>
+
+    <section class="grid">
+      <article class="card">
+        <div class="card-icon">🔐</div>
+        <h2>Google authorization</h2>
+        <p class="description">
+          Authorize the central Google account used by your LMS backend.
+          This is an administrator action, not a student action.
+        </p>
+        <button class="btn primary full" id="connectBtn">
+          Connect Google account
+        </button>
+        <div class="result" id="authResult" aria-live="polite"></div>
+      </article>
+
+      <article class="card">
+        <div class="card-icon">🎥</div>
+        <h2>Create a classroom</h2>
+        <p class="description">
+          Create a Meet space and get a link that you can save against
+          a class in your LMS.
+        </p>
+        <button class="btn primary full" id="createBtn">
+          + Create Google Meet
+        </button>
+        <div class="result" id="meetingResult" aria-live="polite"></div>
+      </article>
+
+      <article class="card">
+        <div class="card-icon">⏺️</div>
+        <h2>Recording status</h2>
+        <p class="description">
+          Check whether Meet has produced recording artifacts for the
+          classroom you created.
+        </p>
+        <button class="btn secondary full" id="recordingsBtn">
+          Check recordings
+        </button>
+        <div class="result" id="recordingResult" aria-live="polite"></div>
+      </article>
+
+      <article class="card">
+        <div class="card-icon">☁️</div>
+        <h2>Google Drive</h2>
+        <p class="description">
+          List MP4 files visible to the authorized Google account
+          and open their available Drive links.
+        </p>
+        <button class="btn secondary full" id="driveBtn">
+          Fetch Drive files
+        </button>
+        <div class="result" id="driveResult" aria-live="polite"></div>
+      </article>
+    </section>
+
+    <div class="notice">
+      <strong>Recording note:</strong> Creating a Meet link does not
+      automatically start a recording. Recording requires an eligible
+      Google Workspace account and the appropriate permissions/settings.
+      This dashboard currently retrieves metadata; it does not download
+      or move videos.
+    </div>
+
+    <div class="section-head">
+      <h2>Activity log</h2>
+      <button class="btn secondary small" id="clearLogBtn">Clear log</button>
+    </div>
+
+    <section class="activity" id="activityLog" aria-live="polite">
+      <div class="activity-entry">Dashboard loaded. Configure your backend URL to begin.</div>
+    </section>
+  </main>
+
+  <script>
+    /*
+      The URL can be configured in the page.
+      No OAuth client secret or Google access token belongs in this file.
+    */
+
+    const DEFAULT_API = "http://localhost:8000";
+
+    const $ = (id) => document.getElementById(id);
+
+    let currentSpaceName = sessionStorage.getItem("meetflowSpaceName") || "";
+
+    function apiBase() {
+      return $("apiUrl").value.trim().replace(/\/+$/, "");
+    }
+
+    function log(message) {
+      const entry = document.createElement("div");
+      entry.className = "activity-entry";
+      entry.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+      $("activityLog").prepend(entry);
+    }
+
+    function showResult(id, message, type = "success") {
+      const el = $(id);
+      el.className = `result show ${type}`;
+      el.replaceChildren();
+
+      const text = document.createElement("div");
+      text.textContent = message;
+      el.appendChild(text);
+    }
+
+    function addTextLine(container, label, value) {
+      const row = document.createElement("div");
+      row.style.marginTop = "7px";
+
+      const strong = document.createElement("strong");
+      strong.textContent = label + ": ";
+
+      row.append(strong, document.createTextNode(value || "Not available"));
+      container.appendChild(row);
+    }
+
+    function addLink(container, url, label) {
+      if (!url) return;
+
+      try {
+        const parsed = new URL(url);
+        if (!["https:", "http:"].includes(parsed.protocol)) return;
+
+        const link = document.createElement("a");
+        link.href = parsed.href;
+        link.textContent = label;
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        link.style.display = "inline-block";
+        link.style.marginTop = "10px";
+        container.appendChild(link);
+      } catch {
+        // Ignore invalid URLs.
+      }
+    }
+
+    function addButton(container, label, callback) {
+      const button = document.createElement("button");
+      button.className = "btn secondary small";
+      button.textContent = label;
+      button.style.marginTop = "10px";
+      button.addEventListener("click", callback);
+      container.appendChild(button);
+    }
+
+    async function apiRequest(path, options = {}) {
+      const base = apiBase();
+
+      if (!base) throw new Error("Enter your FastAPI backend URL first.");
+
+      let response;
+
+      try {
+        response = await fetch(`${base}${path}`, {
+          ...options,
+          headers: {
+            ...(options.headers || {})
+          }
+        });
+      } catch {
+        throw new Error(
+          "Cannot reach FastAPI. Check the URL, server status, HTTPS and CORS configuration."
+        );
+      }
+
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(
+          typeof data.detail === "string"
+            ? data.detail
+            : `Backend request failed (${response.status}).`
+        );
+      }
+
+      return data;
+    }
+
+    function updateConnection(connected, text) {
+      $("statusDot").style.background =
+        connected === true ? "#42dba2" :
+        connected === false ? "#ff777f" : "#eab308";
+
+      $("statusText").textContent = text;
+    }
+
+    async function checkBackend() {
+      try {
+        const data = await apiRequest("/");
+        updateConnection(true, "Backend online");
+
+        showResult(
+          "backendResult",
+          data.message || "FastAPI is responding."
+        );
+
+        log("Backend health check successful.");
+        return true;
+      } catch (error) {
+        updateConnection(false, "Backend unavailable");
+        showResult("backendResult", error.message, "error");
+        log(`Backend check failed: ${error.message}`);
+        return false;
+      }
+    }
+
+    async function checkGoogle() {
+      try {
+        const data = await apiRequest("/auth/status");
+
+        if (data.connected) {
+          showResult("authResult", "Google account is connected.");
+          updateConnection(true, "Google connected");
+          log("Google authorization is active.");
+        } else {
+          showResult(
+            "authResult",
+            "Google is not connected. Use Connect Google account to authorize.",
+            "error"
+          );
+          updateConnection(null, "Google not connected");
+          log("Google authorization is not active.");
+        }
+      } catch (error) {
+        showResult("authResult", error.message, "error");
+        log(`Google status check failed: ${error.message}`);
+      }
+    }
+
+    function connectGoogle() {
+      const base = apiBase();
+
+      if (!base) {
+        showResult("authResult", "Configure the backend URL first.", "error");
+        return;
+      }
+
+      log("Opening Google authorization.");
+      window.location.href = `${base}/auth/google`;
+    }
+
+    async function createMeeting() {
+      const button = $("createBtn");
+      button.disabled = true;
+      button.textContent = "Creating...";
+
+      try {
+        const data = await apiRequest("/meetings", { method: "POST" });
+
+        currentSpaceName = data.space_name || "";
+        sessionStorage.setItem("meetflowSpaceName", currentSpaceName);
+
+        const result = $("meetingResult");
+        result.className = "result show success";
+        result.replaceChildren();
+
+        const heading = document.createElement("div");
+        heading.className = "result-title";
+        heading.textContent = "Meet space created";
+        result.appendChild(heading);
+
+        addTextLine(result, "Meeting code", data.meeting_code);
+        addTextLine(result, "Space name", data.space_name);
+        addLink(result, data.meeting_uri, "Open Google Meet ↗");
+
+        if (data.meeting_uri) {
+          addButton(result, "Copy meeting link", async () => {
+            try {
+              await navigator.clipboard.writeText(data.meeting_uri);
+              log("Meeting link copied.");
+            } catch {
+              log("Copy failed. Open the link and copy it manually.");
+            }
+          });
+        }
+
+        log("Meet space created successfully.");
+      } catch (error) {
+        showResult("meetingResult", error.message, "error");
+        log(`Meeting creation failed: ${error.message}`);
+      } finally {
+        button.disabled = false;
+        button.textContent = "+ Create Google Meet";
+      }
+    }
+
+    async function checkRecordings() {
+      if (!currentSpaceName) {
+        showResult(
+          "recordingResult",
+          "Create a meeting in this browser first. After the meeting has ended, check for recordings.",
+          "error"
+        );
+        return;
+      }
+
+      try {
+        const spaceId = currentSpaceName.split("/").pop();
+        const data = await apiRequest(
+          `/meetings/${encodeURIComponent(spaceId)}/recordings`
+        );
+
+        const result = $("recordingResult");
+        result.className = "result show success";
+        result.replaceChildren();
+
+        const heading = document.createElement("div");
+        heading.className = "result-title";
+        heading.textContent = data.message || "Recording lookup complete.";
+        result.appendChild(heading);
+
+        const recordings = data.recordings || [];
+
+        if (!recordings.length) {
+          const note = document.createElement("p");
+          note.className = "info";
+          note.textContent =
+            "No artifacts found yet. The meeting may not have been recorded, or processing may still be underway.";
+          result.appendChild(note);
+        }
+
+        recordings.forEach((recording, index) => {
+          const item = document.createElement("div");
+          item.style.marginTop = "12px";
+          item.style.paddingTop = "12px";
+          item.style.borderTop = "1px solid #2b2b40";
+
+          addTextLine(item, "Recording", String(index + 1));
+          addTextLine(item, "State", recording.state);
+          addTextLine(item, "Drive file ID", recording.drive_file_id);
+          addLink(item, recording.export_uri, "Open export destination ↗");
+
+          result.appendChild(item);
+        });
+
+        log(`Recording lookup returned ${recordings.length} artifact(s).`);
+      } catch (error) {
+        showResult("recordingResult", error.message, "error");
+        log(`Recording lookup failed: ${error.message}`);
+      }
+    }
+
+    async function fetchDriveFiles() {
+      const button = $("driveBtn");
+      button.disabled = true;
+      button.textContent = "Fetching...";
+
+      try {
+        const data = await apiRequest("/drive/meet-recordings");
+        const files = data.files || [];
+
+        const result = $("driveResult");
+        result.className = "result show success";
+        result.replaceChildren();
+
+        const heading = document.createElement("div");
+        heading.className = "result-title";
+        heading.textContent = `${files.length} MP4 file(s) returned`;
+        result.appendChild(heading);
+
+        if (!files.length) {
+          const note = document.createElement("p");
+          note.className = "info";
+          note.textContent =
+            "No visible MP4 files found. Check Drive permissions and recording availability.";
+          result.appendChild(note);
+        }
+
+        const list = document.createElement("div");
+        list.className = "file-list";
+
+        files.forEach((file) => {
+          const item = document.createElement("div");
+          item.className = "file";
+
+          const name = document.createElement("div");
+          name.className = "file-name";
+          name.textContent = file.name || "Untitled video";
+
+          const meta = document.createElement("div");
+          meta.className = "file-meta";
+          meta.textContent =
+            `Created: ${file.createdTime || "Unknown"}` +
+            (file.size ? ` · ${file.size} bytes` : "");
+
+          item.append(name, meta);
+
+          if (file.webViewLink) {
+            addLink(item, file.webViewLink, "View in Google Drive ↗");
+          }
+
+          list.appendChild(item);
+        });
+
+        result.appendChild(list);
+        log(`Drive returned ${files.length} MP4 file(s).`);
+      } catch (error) {
+        showResult("driveResult", error.message, "error");
+        log(`Drive request failed: ${error.message}`);
+      } finally {
+        button.disabled = false;
+        button.textContent = "Fetch Drive files";
+      }
+    }
+
+    $("saveApiBtn").addEventListener("click", async () => {
+      const value = apiBase();
+
+      try {
+        const url = new URL(value);
+
+        if (!["http:", "https:"].includes(url.protocol)) {
+          throw new Error("Use an HTTP or HTTPS URL.");
+        }
+
+        localStorage.setItem("meetflowApiUrl", value);
+        await checkBackend();
+        await checkGoogle();
+      } catch (error) {
+        showResult("backendResult", error.message, "error");
+      }
+    });
+
+    $("checkBtn").addEventListener("click", checkGoogle);
+    $("connectBtn").addEventListener("click", connectGoogle);
+    $("createBtn").addEventListener("click", createMeeting);
+    $("recordingsBtn").addEventListener("click", checkRecordings);
+    $("driveBtn").addEventListener("click", fetchDriveFiles);
+
+    $("clearLogBtn").addEventListener("click", () => {
+      $("activityLog").replaceChildren();
+      log("Activity log cleared.");
+    });
+
+    // Restore configuration on page load.
+    const params = new URLSearchParams(window.location.search);
+    const savedUrl = localStorage.getItem("meetflowApiUrl");
+
+    $("apiUrl").value = savedUrl || DEFAULT_API;
+
+    if (params.get("google_connected") === "true") {
+      log("Google authorization callback received.");
+      history.replaceState({}, document.title, window.location.pathname);
+    }
+
+    checkBackend().then((online) => {
+      if (online) checkGoogle();
+    });
+  </script>
+</body>
+</html>

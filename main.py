@@ -1,0 +1,887 @@
+
+
+import os
+
+from pathlib import Path
+
+
+
+os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
+
+
+
+import requests
+
+from dotenv import load_dotenv
+
+from fastapi import FastAPI, HTTPException, Request
+
+from fastapi.middleware.cors import CORSMiddleware
+
+from fastapi.responses import RedirectResponse, StreamingResponse, Response
+
+from google.auth.transport.requests import Request as GoogleAuthRequest
+
+from google.oauth2.credentials import Credentials
+
+from google_auth_oauthlib.flow import Flow
+
+
+
+# --------------------------------------------------
+
+# CONFIGURATION
+
+# --------------------------------------------------
+
+
+
+BASE_DIR = Path(__file__).resolve().parent
+
+load_dotenv(BASE_DIR / ".env")
+
+PKCE_VERIFIER_FILE = BASE_DIR / "oauth_code_verifier.txt"
+
+CREDENTIALS_FILE = BASE_DIR / "credentials.json"
+
+TOKEN_FILE = BASE_DIR / "token.json"
+
+STATE_FILE = BASE_DIR / "oauth_state.txt"
+
+
+
+FRONTEND_URL = os.getenv(
+
+    "FRONTEND_URL",
+
+    "http://localhost:5500",
+
+).rstrip("/")
+
+
+
+BACKEND_URL = os.getenv(
+
+    "BACKEND_URL",
+
+    "http://localhost:8000",
+
+).rstrip("/")
+
+
+
+REDIRECT_URI = f"{BACKEND_URL}/auth/callback"
+
+
+
+print("=" * 55)
+
+print("LMS GOOGLE MEET BACKEND")
+
+print(f"Frontend URL: {FRONTEND_URL}")
+
+print(f"Backend URL:  {BACKEND_URL}")
+
+print(f"OAuth redirect URI: {REDIRECT_URI}")
+
+print("=" * 55)
+
+
+
+SCOPES = [
+
+    "https://www.googleapis.com/auth/meetings.space.created",
+
+    "https://www.googleapis.com/auth/meetings.space.readonly",
+
+    "https://www.googleapis.com/auth/drive.meet.readonly",
+
+]
+
+
+
+# --------------------------------------------------
+
+# FASTAPI APP
+
+# --------------------------------------------------
+
+
+
+app = FastAPI(title="LMS Google Meet and Drive API")
+
+
+
+app.add_middleware(
+
+    CORSMiddleware,
+
+    allow_origins=[
+    "https://studpro-lms.netlify.app",
+    "https://gmeet-test.netlify.app",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+],
+
+    allow_credentials=False,
+
+    allow_methods=["GET", "POST", "OPTIONS"],
+
+    allow_headers=["Content-Type", "Authorization"],
+
+)
+
+
+
+
+
+# --------------------------------------------------
+
+# GOOGLE OAUTH HELPERS
+
+# --------------------------------------------------
+
+
+
+def get_flow(state=None):
+
+    if not CREDENTIALS_FILE.exists():
+
+        raise HTTPException(
+
+            status_code=500,
+
+            detail=(
+
+                "credentials.json not found. "
+
+                "Place your Google OAuth Web application "
+
+                "credentials in the backend folder."
+
+            ),
+
+        )
+
+
+
+    try:
+
+        flow = Flow.from_client_secrets_file(
+
+            str(CREDENTIALS_FILE),
+
+            scopes=SCOPES,
+
+            state=state,
+
+        )
+
+
+
+        flow.redirect_uri = REDIRECT_URI
+
+        return flow
+
+
+
+    except Exception as exc:
+
+        raise HTTPException(
+
+            status_code=500,
+
+            detail=f"Could not load Google OAuth credentials: {exc}",
+
+        )
+
+
+
+
+
+def save_credentials(credentials):
+
+    TOKEN_FILE.write_text(
+
+        credentials.to_json(),
+
+        encoding="utf-8",
+
+    )
+
+
+
+
+
+def get_credentials():
+
+    if not TOKEN_FILE.exists():
+
+        raise HTTPException(
+
+            status_code=401,
+
+            detail=(
+
+                "Google account is not connected. "
+
+                "Open /auth/google to authorize."
+
+            ),
+
+        )
+
+
+
+    try:
+
+        credentials = Credentials.from_authorized_user_file(
+
+            str(TOKEN_FILE),
+
+            SCOPES,
+
+        )
+
+
+
+        if credentials.expired and credentials.refresh_token:
+
+            credentials.refresh(GoogleAuthRequest())
+
+            save_credentials(credentials)
+
+
+
+        if not credentials.valid:
+
+            raise HTTPException(
+
+                status_code=401,
+
+                detail=(
+
+                    "Google credentials are invalid or expired. "
+
+                    "Reconnect your Google account."
+
+                ),
+
+            )
+
+
+
+        return credentials
+
+
+
+    except HTTPException:
+
+        raise
+
+
+
+    except Exception as exc:
+
+        raise HTTPException(
+
+            status_code=401,
+
+            detail=f"Unable to load Google credentials: {exc}",
+
+        )
+
+
+
+
+
+def google_request(method, url, **kwargs):
+
+    credentials = get_credentials()
+
+
+
+    # Refresh an expired token before making a Google API request.
+
+    if credentials.expired and credentials.refresh_token:
+
+        credentials.refresh(GoogleAuthRequest())
+
+        save_credentials(credentials)
+
+
+
+    headers = kwargs.pop("headers", {}).copy()
+
+    headers["Authorization"] = f"Bearer {credentials.token}"
+
+
+
+    try:
+
+        response = requests.request(
+
+            method,
+
+            url,
+
+            headers=headers,
+
+            timeout=30,
+
+            **kwargs,
+
+        )
+
+
+
+        response.raise_for_status()
+
+
+
+        if not response.content:
+
+            return {}
+
+
+
+        return response.json()
+
+
+
+    except requests.HTTPError as exc:
+
+        detail = (
+
+            exc.response.text[:1500]
+
+            if exc.response is not None
+
+            else str(exc)
+
+        )
+
+
+
+        raise HTTPException(
+
+            status_code=502,
+
+            detail=f"Google API error: {detail}",
+
+        )
+
+
+
+    except requests.RequestException as exc:
+
+        raise HTTPException(
+
+            status_code=502,
+
+            detail=f"Google API connection failed: {exc}",
+
+        )
+
+
+
+
+
+# --------------------------------------------------
+
+# HEALTH CHECK
+
+# --------------------------------------------------
+
+
+
+@app.get("/")
+
+def home():
+
+    return {
+
+        "message": "LMS Google Meet backend is running",
+
+        "frontend_url": FRONTEND_URL,
+
+        "backend_url": BACKEND_URL,
+
+        "redirect_uri": REDIRECT_URI,
+
+        "docs": f"{BACKEND_URL}/docs",
+
+    }
+
+
+
+
+
+# --------------------------------------------------
+
+# GOOGLE OAUTH
+
+# --------------------------------------------------
+
+@app.get("/auth/google")
+
+def auth_google():
+
+    flow = Flow.from_client_secrets_file(
+
+        str(CREDENTIALS_FILE),
+
+        scopes=SCOPES,
+
+        redirect_uri=REDIRECT_URI,
+
+        autogenerate_code_verifier=True,
+
+    )
+
+
+
+    authorization_url, state = flow.authorization_url(
+
+        access_type="offline",
+
+        include_granted_scopes="true",
+
+        prompt="consent",
+
+    )
+
+
+
+    PKCE_VERIFIER_FILE.write_text(
+
+        flow.code_verifier,
+
+        encoding="utf-8",
+
+    )
+
+    STATE_FILE.write_text(state, encoding="utf-8")
+
+
+
+    return RedirectResponse(authorization_url)
+
+@app.get("/auth/callback")
+
+def auth_callback(request: Request):
+
+    state = request.query_params.get("state")
+
+
+
+    saved_state = STATE_FILE.read_text(encoding="utf-8").strip()
+
+    if state != saved_state:
+
+        raise HTTPException(status_code=400, detail="Invalid OAuth state")
+
+
+
+    flow = Flow.from_client_secrets_file(
+
+        str(CREDENTIALS_FILE),
+
+        scopes=SCOPES,
+
+        state=saved_state,
+
+        redirect_uri=REDIRECT_URI,
+
+        autogenerate_code_verifier=False,
+
+    )
+
+
+
+    flow.code_verifier = PKCE_VERIFIER_FILE.read_text(
+
+        encoding="utf-8"
+
+    ).strip()
+
+
+
+    authorization_response = str(request.url)
+
+    flow.fetch_token(authorization_response=authorization_response)
+
+
+
+    credentials = flow.credentials
+
+    with open(TOKEN_FILE, "w", encoding="utf-8") as token_file:
+
+        token_file.write(credentials.to_json())
+
+
+
+    return RedirectResponse(FRONTEND_URL)
+
+
+
+
+
+@app.get("/auth/status")
+
+def auth_status():
+
+    if not TOKEN_FILE.exists():
+
+        return {"connected": False}
+
+
+
+    try:
+
+        credentials = get_credentials()
+
+
+
+        return {
+
+            "connected": credentials.valid,
+
+            "account_authorized": True,
+
+        }
+
+
+
+    except HTTPException:
+
+        return {"connected": False}
+
+
+
+
+
+# --------------------------------------------------
+
+# CREATE GOOGLE MEET
+
+# --------------------------------------------------
+
+
+
+@app.post("/meetings")
+
+def create_meeting():
+
+    space = google_request(
+
+        "POST",
+
+        "https://meet.googleapis.com/v2/spaces",
+
+        json={},
+
+    )
+
+
+
+    meeting_uri = space.get("meetingUri")
+
+
+
+    if not meeting_uri:
+
+        raise HTTPException(
+
+            status_code=502,
+
+            detail="Google did not return a meeting URI.",
+
+        )
+
+
+
+    return {
+
+        "space_name": space.get("name"),
+
+        "meeting_uri": meeting_uri,
+
+        "meeting_code": space.get("meetingCode"),
+
+        "message": "Google Meet space created successfully.",
+
+    }
+
+
+
+
+
+# --------------------------------------------------
+
+# GET MEETING RECORDINGS
+
+# --------------------------------------------------
+
+
+
+@app.get("/meetings/{space_id}/recordings")
+
+def get_recordings(space_id: str):
+
+    if not space_id or "/" in space_id or ".." in space_id:
+
+        raise HTTPException(
+
+            status_code=400,
+
+            detail="Invalid Meet space ID.",
+
+        )
+
+
+
+    space_name = f"spaces/{space_id}"
+
+
+
+    conference_data = google_request(
+
+        "GET",
+
+        "https://meet.googleapis.com/v2/conferenceRecords",
+
+        params={
+
+            "filter": f'space.name = "{space_name}"',
+
+            "pageSize": 100,
+
+        },
+
+    )
+
+
+
+    results = []
+
+
+
+    for conference in conference_data.get("conferenceRecords", []):
+
+        record_name = conference.get("name")
+
+
+
+        if not record_name:
+
+            continue
+
+
+
+        recording_data = google_request(
+
+            "GET",
+
+            f"https://meet.googleapis.com/v2/{record_name}/recordings",
+
+            params={"pageSize": 100},
+
+        )
+
+
+
+        for recording in recording_data.get("recordings", []):
+
+            destination = recording.get("driveDestination") or {}
+
+
+
+            results.append({
+
+                "recording_name": recording.get("name"),
+
+                "state": recording.get("state"),
+
+                "drive_file_id": destination.get("file"),
+
+                "export_uri": destination.get("exportUri"),
+
+            })
+
+
+
+    return {
+
+        "space_name": space_name,
+
+        "recordings": results,
+
+        "message": (
+
+            "Recording metadata retrieved."
+
+            if results
+
+            else (
+
+                "No recording artifacts found yet. "
+
+                "The meeting may not have been recorded, "
+
+                "or Google may still be processing it."
+
+            )
+
+        ),
+
+    }
+
+
+
+
+
+# --------------------------------------------------
+
+# LIST GOOGLE DRIVE MP4 FILES
+
+# --------------------------------------------------
+
+
+
+@app.get("/drive/meet-recordings")
+
+def list_drive_recordings():
+
+    result = google_request(
+
+        "GET",
+
+        "https://www.googleapis.com/drive/v3/files",
+
+        params={
+
+            "q": "mimeType = 'video/mp4' and trashed = false",
+
+            "pageSize": 100,
+
+            "orderBy": "createdTime desc",
+
+            "fields": (
+
+                "files(id,name,mimeType,createdTime,"
+
+                "webViewLink,size)"
+
+            ),
+
+        },
+
+    )
+
+
+
+    return {
+
+        "files": result.get("files", []),
+
+    }
+
+
+# --------------------------------------------------
+# STREAM GOOGLE DRIVE VIDEOS TO THE LMS PLAYER
+# --------------------------------------------------
+
+@app.get("/api/videos/{file_id}/stream")
+def stream_drive_video(file_id: str, request: Request):
+    """
+    Stream a Google Drive video to the browser's native <video> player.
+    Supports HTTP Range requests so students can seek within the video.
+    """
+    if not file_id or "/" in file_id or ".." in file_id:
+        raise HTTPException(status_code=400, detail="Invalid Drive file ID.")
+
+    credentials = get_credentials()
+
+    if credentials.expired and credentials.refresh_token:
+        try:
+            credentials.refresh(GoogleAuthRequest())
+            save_credentials(credentials)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=401,
+                detail=f"Unable to refresh Google credentials: {exc}",
+            )
+
+    if not credentials.valid or not credentials.token:
+        raise HTTPException(
+            status_code=401,
+            detail="Google credentials are invalid. Reconnect your Google account.",
+        )
+
+    drive_url = f"https://www.googleapis.com/drive/v3/files/{file_id}"
+    headers = {"Authorization": f"Bearer {credentials.token}"}
+
+    # Forward the browser's byte-range request for seeking and partial playback.
+    range_header = request.headers.get("range")
+    if range_header:
+        headers["Range"] = range_header
+
+    try:
+        upstream = requests.get(
+            drive_url,
+            params={"alt": "media"},
+            headers=headers,
+            stream=True,
+            timeout=(15, 300),
+        )
+    except requests.RequestException as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Could not connect to Google Drive: {exc}",
+        )
+
+    if upstream.status_code not in (200, 206, 416):
+        try:
+            detail = upstream.text[:1000]
+        finally:
+            upstream.close()
+        raise HTTPException(
+            status_code=502,
+            detail=f"Google Drive returned HTTP {upstream.status_code}: {detail}",
+        )
+
+    response_headers = {
+        "Accept-Ranges": upstream.headers.get("Accept-Ranges", "bytes"),
+        "Content-Type": upstream.headers.get("Content-Type", "video/mp4"),
+        "Cache-Control": "private, no-store",
+        "X-Content-Type-Options": "nosniff",
+    }
+
+    for header_name in ("Content-Range", "Content-Length"):
+        header_value = upstream.headers.get(header_name)
+        if header_value:
+            response_headers[header_name] = header_value
+
+    if upstream.status_code == 416:
+        upstream.close()
+        return Response(
+            status_code=416,
+            headers=response_headers,
+        )
+
+    def video_chunks():
+        try:
+            for chunk in upstream.iter_content(chunk_size=1024 * 1024):
+                if chunk:
+                    yield chunk
+        finally:
+            upstream.close()
+
+    return StreamingResponse(
+        video_chunks(),
+        status_code=upstream.status_code,
+        headers=response_headers,
+        media_type=response_headers["Content-Type"],
+    )
+
