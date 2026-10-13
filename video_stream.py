@@ -10,11 +10,12 @@ from google.auth.transport.requests import Request as GoogleRequest
 
 router = APIRouter(prefix="/api/videos", tags=["Videos"])
 
-BASE_DIR = Path(__file__).resolve().parent
-TOKEN_FILE = BASE_DIR / "/etc/secrets/token.json"
+TOKEN_FILE = Path(
+    os.getenv("GOOGLE_TOKEN_FILE", "/etc/secrets/token.json")
+)
 
-# Use the exact ID from your successful Python test.
-VIDEO_ID = "106erqKvsZIKKS0ni8SrgrtsofXCUONK1"
+# Exact Google Drive file ID
+VIDEO_ID = "106erqKvsZIKkSOni8SrgrtsofXcUONKl"
 
 SCOPES = [
     "https://www.googleapis.com/auth/meetings.space.created",
@@ -28,32 +29,44 @@ def get_access_token():
     if not TOKEN_FILE.exists():
         raise HTTPException(
             status_code=500,
-            detail="Google Drive credentials are not configured.",
+            detail="Google token file not found. Check GOOGLE_TOKEN_FILE in Render.",
         )
 
-    creds = Credentials.from_authorized_user_file(
-        str(TOKEN_FILE),
-        SCOPES,
-    )
+    try:
+        creds = Credentials.from_authorized_user_file(
+            str(TOKEN_FILE), SCOPES
+        )
 
-    if not creds.valid:
-        if creds.expired and creds.refresh_token:
-            creds.refresh(GoogleRequest())
-        else:
+        if not creds.valid:
+            if creds.expired and creds.refresh_token:
+                creds.refresh(GoogleRequest())
+                # Do not write to /etc/secrets/token.json.
+                # Render Secret Files are read-only.
+            else:
+                raise HTTPException(
+                    status_code=401,
+                    detail="Google authorization is invalid. Reconnect Google.",
+                )
+
+        if not creds.token:
             raise HTTPException(
-                status_code=500,
-                detail="Google Drive authorization has expired.",
+                status_code=401,
+                detail="Google access token is unavailable.",
             )
 
-        TOKEN_FILE.write_text(creds.to_json(), encoding="utf-8")
+        return creds.token
 
-    return creds.token
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=401,
+            detail=f"Unable to load or refresh Google credentials: {exc}",
+        )
 
 
 @router.get("/{file_id}/stream")
 def stream_video(file_id: str, request: Request):
-    # For this first test, allow only your known video.
-    # Later, look up authorized videos in your database.
     if file_id != VIDEO_ID:
         raise HTTPException(status_code=404, detail="Video not found.")
 
@@ -61,24 +74,30 @@ def stream_video(file_id: str, request: Request):
         "Authorization": f"Bearer {get_access_token()}",
     }
 
-    # Forward the browser's requested byte range.
     range_header = request.headers.get("range")
     if range_header:
         headers["Range"] = range_header
 
-    upstream = requests.get(
-        f"https://www.googleapis.com/drive/v3/files/{file_id}",
-        params={"alt": "media"},
-        headers=headers,
-        stream=True,
-        timeout=(15, 120),
-    )
+    try:
+        upstream = requests.get(
+            f"https://www.googleapis.com/drive/v3/files/{file_id}",
+            params={"alt": "media"},
+            headers=headers,
+            stream=True,
+            timeout=(15, 120),
+        )
+    except requests.RequestException:
+        raise HTTPException(
+            status_code=502,
+            detail="Could not connect to Google Drive.",
+        )
 
     if upstream.status_code not in (200, 206, 416):
+        status = upstream.status_code
         upstream.close()
         raise HTTPException(
             status_code=502,
-            detail="Google Drive could not provide the video.",
+            detail=f"Google Drive returned HTTP {status}. Check token permissions and file access.",
         )
 
     response_headers = {
@@ -86,21 +105,14 @@ def stream_video(file_id: str, request: Request):
         "Cache-Control": "private, no-store",
     }
 
-    for header in (
-        "Content-Range",
-        "Content-Length",
-        "Content-Type",
-    ):
-        value = upstream.headers.get(header)
+    for name in ("Content-Range", "Content-Length", "Content-Type"):
+        value = upstream.headers.get(name)
         if value:
-            response_headers[header] = value
+            response_headers[name] = value
 
     if upstream.status_code == 416:
         upstream.close()
-        return Response(
-            status_code=416,
-            headers=response_headers,
-        )
+        return Response(status_code=416, headers=response_headers)
 
     def video_chunks():
         try:
