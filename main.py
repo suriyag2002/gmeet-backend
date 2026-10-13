@@ -14,8 +14,8 @@ load_dotenv(BASE_DIR / ".env")
 # Render Secret Files and Persistent Disk paths can be configured with environment variables.
 # Local development falls back to files beside main.py.
 PKCE_VERIFIER_FILE = Path(os.getenv("OAUTH_PKCE_FILE", str(BASE_DIR / "oauth_code_verifier.txt")))
-CREDENTIALS_FILE = Path(os.getenv("GOOGLE_CREDENTIALS_FILE", str(BASE_DIR / "/etc/secrets/credentials.json")))
-TOKEN_FILE = Path(os.getenv("GOOGLE_TOKEN_FILE", str(BASE_DIR / "/etc/secrets/token.json")))
+CREDENTIALS_FILE = Path(os.getenv("GOOGLE_CREDENTIALS_FILE", str(BASE_DIR / "etc/secrets/credentials.json")))
+TOKEN_FILE = Path(os.getenv("GOOGLE_TOKEN_FILE", str(BASE_DIR / "etc/secrets/token.json")))
 STATE_FILE = Path(os.getenv("OAUTH_STATE_FILE", str(BASE_DIR / "oauth_state.txt")))
 FRONTEND_URL = os.getenv(
     "FRONTEND_URL",
