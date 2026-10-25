@@ -29,7 +29,6 @@ CREDENTIALS_FILE = Path(
             else BASE_DIR / "credentials.json"),
     )
 )
-
 # Render Secret Files are read-only. Read the secret token as a fallback, but
 # write newly authorized/refreshed credentials to a writable path.
 TOKEN_SECRET_FILE = Path(
