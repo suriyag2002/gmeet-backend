@@ -165,9 +165,15 @@ def save_credentials(credentials):
         timeout=20,
     )
     if not response.ok:
-        logger.error("Supabase credential save failed: HTTP %s", response.status_code)
-        raise HTTPException(status_code=502, detail="Could not save Google credentials to secure storage.")
-
+    logger.error(
+        "Supabase credential save failed: HTTP %s; response=%s",
+        response.status_code,
+        response.text[:1000],
+    )
+    raise HTTPException(
+        status_code=502,
+        detail="Could not save Google credentials to secure storage. Check backend logs.",
+    )
 
 def get_credentials():
     logger.info("Loading Google credentials from Supabase")
