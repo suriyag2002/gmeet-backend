@@ -1,6 +1,7 @@
 import os
 import json
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
 os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
 import requests
@@ -20,8 +21,6 @@ logger = logging.getLogger("studpro.drive")
 
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env")
-# Render Secret Files and Persistent Disk paths can be configured with environment variables.
-# Local development falls back to files beside main.py.
 PKCE_VERIFIER_FILE = Path(os.getenv("OAUTH_PKCE_FILE", str(BASE_DIR / "oauth_code_verifier.txt")))
 CREDENTIALS_FILE = Path(
     os.getenv(
@@ -30,19 +29,10 @@ CREDENTIALS_FILE = Path(
             else BASE_DIR / "credentials.json"),
     )
 )
-# Render Secret Files are read-only. Read the secret token as a fallback, but
-# write newly authorized/refreshed credentials to a writable path.
-TOKEN_SECRET_FILE = Path(
-    os.getenv(
-        "GOOGLE_TOKEN_FILE",
-        str(Path("/etc/secrets/token.json") if Path("/etc/secrets/token.json").exists()
-            else BASE_DIR / "token.json"),
-    )
-)
-TOKEN_WRITE_FILE = Path(
-    os.getenv("GOOGLE_TOKEN_WRITE_FILE", str(BASE_DIR / "token.json"))
-)
 STATE_FILE = Path(os.getenv("OAUTH_STATE_FILE", str(BASE_DIR / "oauth_state.txt")))
+SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
+SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
+SUPABASE_TOKEN_TABLE = "google_oauth_tokens"
 FRONTEND_URL = os.getenv(
     "FRONTEND_URL",
     "http://localhost:5500",
@@ -102,94 +92,113 @@ def get_flow(state=None):
             status_code=500,
             detail=f"Could not load Google OAuth credentials: {exc}",
         )
-def save_credentials(credentials):
-    """Save OAuth credentials only to a writable path, never to a Render Secret File."""
-    TOKEN_WRITE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    TOKEN_WRITE_FILE.write_text(
-        credentials.to_json(),
-        encoding="utf-8",
+def _supabase_headers(prefer=None):
+    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
+        raise HTTPException(
+            status_code=500,
+            detail="Supabase credential storage is not configured on the backend.",
+        )
+    headers = {
+        "apikey": SUPABASE_SERVICE_ROLE_KEY,
+        "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
+        "Content-Type": "application/json",
+    }
+    if prefer:
+        headers["Prefer"] = prefer
+    return headers
+
+
+def _load_stored_credentials():
+    url = f"{SUPABASE_URL}/rest/v1/{SUPABASE_TOKEN_TABLE}"
+    response = requests.get(
+        url,
+        headers=_supabase_headers(),
+        params={"id": "eq.1", "select": "credentials,refresh_token", "limit": 1},
+        timeout=20,
     )
+    if not response.ok:
+        logger.error("Supabase credential read failed: HTTP %s", response.status_code)
+        raise HTTPException(status_code=502, detail="Could not load Google credentials from secure storage.")
+    rows = response.json()
+    if not rows:
+        return None
+    row = rows[0]
+    info = row.get("credentials")
+    if not isinstance(info, dict):
+        return None
+    if not info.get("refresh_token") and row.get("refresh_token"):
+        info["refresh_token"] = row["refresh_token"]
+    return Credentials.from_authorized_user_info(info, SCOPES)
+
+
+def save_credentials(credentials):
+    """Persist the full OAuth credential state in the private Supabase table."""
+    url = f"{SUPABASE_URL}/rest/v1/{SUPABASE_TOKEN_TABLE}"
+    info = json.loads(credentials.to_json())
+    # Google may omit refresh_token in a later response; preserve the existing one.
+    if not info.get("refresh_token"):
+        previous = requests.get(
+            url,
+            headers=_supabase_headers(),
+            params={"id": "eq.1", "select": "refresh_token", "limit": 1},
+            timeout=20,
+        )
+        if previous.ok and previous.json():
+            info["refresh_token"] = previous.json()[0].get("refresh_token")
+    refresh_token = info.get("refresh_token")
+    if not refresh_token:
+        raise HTTPException(
+            status_code=400,
+            detail="Google did not return a refresh token. Reconnect Google with offline access and consent.",
+        )
+    payload = {
+        "id": 1,
+        "refresh_token": refresh_token,
+        "credentials": info,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    response = requests.post(
+        url,
+        headers=_supabase_headers("resolution=merge-duplicates,return=minimal"),
+        params={"on_conflict": "id"},
+        json=payload,
+        timeout=20,
+    )
+    if not response.ok:
+        logger.error("Supabase credential save failed: HTTP %s", response.status_code)
+        raise HTTPException(status_code=502, detail="Could not save Google credentials to secure storage.")
 
 
 def get_credentials():
-    # Prefer the writable token so refreshed credentials can be reused.
-    token_path = TOKEN_WRITE_FILE if TOKEN_WRITE_FILE.exists() else TOKEN_SECRET_FILE
-
-    logger.info("Loading Google credentials")
-    logger.info("Selected token path: %s", token_path)
-    logger.info("Token file exists: %s", token_path.exists())
-    logger.info("OAuth client file path: %s", CREDENTIALS_FILE)
-    logger.info("OAuth client file exists: %s", CREDENTIALS_FILE.exists())
-
-    if not token_path.exists():
-        logger.error("No Google token file found")
-        raise HTTPException(
-            status_code=401,
-            detail="Google account is not connected. Open /auth/google to authorize.",
-        )
-
+    logger.info("Loading Google credentials from Supabase")
+    if not CREDENTIALS_FILE.exists():
+        raise HTTPException(status_code=500, detail="Google OAuth credentials file is missing on the backend.")
     try:
-        credentials = Credentials.from_authorized_user_file(str(token_path), SCOPES)
-        logger.info(
-            "Token loaded; valid=%s expired=%s refresh_token_present=%s",
-            credentials.valid,
-            credentials.expired,
-            bool(credentials.refresh_token),
-        )
-        # Never log access tokens, refresh tokens, or client secrets.
-        logger.debug("Scopes stored in token: %s", credentials.scopes)
-
-        # Safe diagnostic: compare OAuth client IDs without printing either ID.
-        try:
-            with CREDENTIALS_FILE.open("r", encoding="utf-8") as client_file:
-                client_config = json.load(client_file)
-            oauth_config = client_config.get("web") or client_config.get("installed") or {}
-            configured_client_id = oauth_config.get("client_id")
-            token_client_id = getattr(credentials, "client_id", None)
-            logger.info(
-                "OAuth client ID matches saved token: %s",
-                bool(configured_client_id and token_client_id and configured_client_id == token_client_id),
-            )
-        except Exception as diagnostic_exc:
-            logger.warning(
-                "Could not compare OAuth client IDs; diagnostic_type=%s",
-                type(diagnostic_exc).__name__,
-            )
-
-        if credentials.expired and credentials.refresh_token:
-            logger.info("Google credentials expired; attempting refresh")
-            credentials.refresh(GoogleAuthRequest())
-            save_credentials(credentials)
-            logger.info("Google credentials refreshed and saved to %s", TOKEN_WRITE_FILE)
-
-        if not credentials.valid:
-            logger.error("Google credentials remain invalid")
+        credentials = _load_stored_credentials()
+        if credentials is None:
             raise HTTPException(
                 status_code=401,
-                detail="Google credentials are invalid or expired. Reconnect your Google account.",
+                detail="Google account is not connected. Open /auth/google once to authorize.",
             )
+        logger.info(
+            "Google credentials loaded; valid=%s expired=%s refresh_token_present=%s",
+            credentials.valid, credentials.expired, bool(credentials.refresh_token),
+        )
+        if credentials.expired or not credentials.valid:
+            if not credentials.refresh_token:
+                raise HTTPException(status_code=401, detail="Google refresh token is missing. Reconnect Google.")
+            logger.info("Google credentials expired or invalid; attempting refresh")
+            credentials.refresh(GoogleAuthRequest())
+            save_credentials(credentials)
+            logger.info("Google credentials refreshed and saved to Supabase")
+        if not credentials.valid or not credentials.token:
+            raise HTTPException(status_code=401, detail="Google credentials remain invalid. Reconnect Google.")
         return credentials
     except HTTPException:
         raise
-    
     except Exception as exc:
-        logger.exception(
-            "Google credential operation failed; exception_type=%s",
-            type(exc).__name__,
-        )
-    
-        # Log safe diagnostics only. Never log tokens or client secrets.
-        logger.error("Credential file exists: %s", CREDENTIALS_FILE.exists())
-        logger.error("Token source exists: %s", token_path.exists())
-    
-        if isinstance(exc, Exception):
-            logger.error("Google credential error: %s", str(exc))
-    
-        raise HTTPException(
-            status_code=401,
-            detail="Google credentials could not be refreshed. Check backend logs.",
-        ) from exc
-
+        logger.exception("Google credential operation failed; exception_type=%s", type(exc).__name__)
+        raise HTTPException(status_code=401, detail="Google credentials could not be refreshed. Check backend logs.") from exc
 
 
 def google_request(method, url, **kwargs):
@@ -277,10 +286,7 @@ def auth_callback(request: Request):
     return RedirectResponse(FRONTEND_URL)
 @app.get("/auth/status")
 def auth_status():
-    logger.info("Checking local Google auth status")
-    if not TOKEN_WRITE_FILE.exists() and not TOKEN_SECRET_FILE.exists():
-        logger.warning("No token file exists at either configured token path")
-        return {"connected": False}
+    logger.info("Checking Google auth status in Supabase")
     try:
         credentials = get_credentials()
         return {"connected": credentials.valid, "account_authorized": True}
