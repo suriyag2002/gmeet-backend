@@ -62,6 +62,7 @@ app.add_middleware(
     allow_origins=[
     "https://studpro-lms.netlify.app",
     "https://gmeet-test.netlify.app",
+    "https://studpro.app",
     "http://localhost:5173",
     "http://127.0.0.1:5173",
 ],
